@@ -1,0 +1,14 @@
+app.get('/api/recent', async (req, res) => {
+  const { data, error } = await supabase
+    .from('zodiac_entries')
+    .select('id, name, zodiac_sign, timestamp')
+    .order('timestamp', { ascending: false })
+    .limit(10);
+
+  if (error) {
+    console.error('Supabase fetch error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to fetch data' });
+  }
+
+  res.json({ success: true, data });
+});

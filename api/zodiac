@@ -1,0 +1,26 @@
+import { supabase } from './supabaseClient.js';
+
+// inside app.post('/api/zodiac'...)
+const { name, dateOfBirth } = req.body;
+const birthDate = new Date(dateOfBirth);
+const zodiacSign = calculateZodiacSign(birthDate);
+
+// Save to Supabase
+const { error } = await supabase.from('zodiac_entries').insert([{
+  name: name.trim(),
+  date_of_birth: dateOfBirth,
+  zodiac_sign: zodiacSign,
+}]);
+
+if (error) {
+  console.error('Supabase insert error:', error);
+  return res.status(500).json({ success: false, message: 'Failed to save data' });
+}
+
+res.json({
+  success: true,
+  data: {
+    zodiacSign,
+    message: `Hello ${name}! Your zodiac sign is ${zodiacSign}.`
+  }
+});

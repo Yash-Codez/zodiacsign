@@ -3,17 +3,16 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { body, validationResult } from 'express-validator';
+import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import fs from 'fs/promises';
-import { supabase } from './supabaseClient.js';
-
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const app = express();
 const PORT = process.env.PORT || 3001;
+const DATA_FILE = path.join(__dirname, 'data.json');
 const DIST_PATH = path.join(__dirname, 'dist');
 
 // Security middleware
@@ -28,9 +27,9 @@ app.use(helmet({
   },
 }));
 
-// Rate limiting
+// Rate limiting - Allow 100 requests per 15 minutes per IP
 const limiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
+  windowMs: 15 * 60 * 1000, // 15 minutes
   max: 100,
   message: 'Too many requests from this IP, please try again later.',
   standardHeaders: true,
@@ -41,7 +40,7 @@ app.use(limiter);
 app.use(cors());
 app.use(express.json({ limit: '10mb' }));
 
-// Serve static files if dist exists
+// Check if dist directory exists and serve static files only if it does
 async function checkDistExists() {
   try {
     await fs.access(DIST_PATH);
@@ -51,6 +50,7 @@ async function checkDistExists() {
   }
 }
 
+// Conditionally serve static files
 let distExists = await checkDistExists();
 if (distExists) {
   app.use(express.static('dist'));
@@ -70,15 +70,27 @@ const zodiacValidation = [
       const date = new Date(value);
       const now = new Date();
       const minDate = new Date('1900-01-01');
-      if (date > now) throw new Error('Date of birth cannot be in the future');
-      if (date < minDate) throw new Error('Date of birth must be after 1900');
+      
+      if (date > now) {
+        throw new Error('Date of birth cannot be in the future');
+      }
+      if (date < minDate) {
+        throw new Error('Date of birth must be after 1900');
+      }
       return true;
     }),
 ];
 
+/**
+ * Calculate zodiac sign based on birth date
+ * @param {Date} date - The birth date
+ * @returns {string} - The zodiac sign
+ */
 function calculateZodiacSign(date) {
-  const month = date.getMonth() + 1;
+  const month = date.getMonth() + 1; // getMonth() returns 0-11
   const day = date.getDate();
+  
+  // Zodiac sign date ranges
   const zodiacSigns = [
     { sign: 'Capricorn', startMonth: 12, startDay: 22, endMonth: 1, endDay: 19 },
     { sign: 'Aquarius', startMonth: 1, startDay: 20, endMonth: 2, endDay: 18 },
@@ -93,13 +105,15 @@ function calculateZodiacSign(date) {
     { sign: 'Scorpio', startMonth: 10, startDay: 23, endMonth: 11, endDay: 21 },
     { sign: 'Sagittarius', startMonth: 11, startDay: 22, endMonth: 12, endDay: 21 },
   ];
-
+  
   for (const zodiac of zodiacSigns) {
     if (zodiac.startMonth === zodiac.endMonth) {
+      // Same month range
       if (month === zodiac.startMonth && day >= zodiac.startDay && day <= zodiac.endDay) {
         return zodiac.sign;
       }
     } else {
+      // Cross-month range
       if (
         (month === zodiac.startMonth && day >= zodiac.startDay) ||
         (month === zodiac.endMonth && day <= zodiac.endDay)
@@ -108,31 +122,93 @@ function calculateZodiacSign(date) {
       }
     }
   }
-
-  return 'Unknown';
+  
+  return 'Unknown'; // Fallback
 }
 
-// POST /api/zodiac - Store in Supabase
+/**
+ * Initialize data file if it doesn't exist
+ */
+async function initializeDataFile() {
+  try {
+    await fs.access(DATA_FILE);
+  } catch (error) {
+    // File doesn't exist, create it with empty array
+    await fs.writeFile(DATA_FILE, JSON.stringify([], null, 2));
+    console.log('Data file initialized');
+  }
+}
+
+/**
+ * Read data from JSON file
+ * @returns {Array} - Array of zodiac entries
+ */
+async function readData() {
+  try {
+    const data = await fs.readFile(DATA_FILE, 'utf8');
+    return JSON.parse(data);
+  } catch (error) {
+    console.error('Error reading data file:', error);
+    return [];
+  }
+}
+
+/**
+ * Write data to JSON file
+ * @param {Array} data - Array of zodiac entries to write
+ */
+async function writeData(data) {
+  try {
+    await fs.writeFile(DATA_FILE, JSON.stringify(data, null, 2));
+  } catch (error) {
+    console.error('Error writing data file:', error);
+    throw new Error('Failed to save data');
+  }
+}
+
+// API Routes
+
+/**
+ * POST /api/zodiac - Calculate and store zodiac sign
+ */
 app.post('/api/zodiac', zodiacValidation, async (req, res) => {
   try {
+    // Check for validation errors
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      return res.status(400).json({ 
+        success: false, 
+        errors: errors.array() 
+      });
     }
 
     const { name, dateOfBirth } = req.body;
     const birthDate = new Date(dateOfBirth);
     const zodiacSign = calculateZodiacSign(birthDate);
-
-    const { data, error } = await supabase
-      .from('zodiac_entries')
-      .insert([{ name: name.trim(), dob: dateOfBirth, zodiac: zodiacSign }]);
-
-    if (error) {
-      console.error('Supabase insert error:', error);
-      return res.status(500).json({ success: false, message: 'Database insert error' });
+    
+    // Create entry object
+    const entry = {
+      id: Date.now(), // Simple ID generation
+      name: name.trim(),
+      dateOfBirth,
+      zodiacSign,
+      timestamp: new Date().toISOString(),
+    };
+    
+    // Read existing data
+    const existingData = await readData();
+    
+    // Add new entry to the beginning of the array
+    existingData.unshift(entry);
+    
+    // Keep only the last 100 entries to prevent file from growing too large
+    if (existingData.length > 100) {
+      existingData.splice(100);
     }
-
+    
+    // Write updated data
+    await writeData(existingData);
+    
     res.json({
       success: true,
       data: {
@@ -140,56 +216,94 @@ app.post('/api/zodiac', zodiacValidation, async (req, res) => {
         message: `Hello ${name}! Your zodiac sign is ${zodiacSign}.`
       }
     });
+    
   } catch (error) {
     console.error('Error processing zodiac request:', error);
-    res.status(500).json({ success: false, message: 'Internal server error' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error' 
+    });
   }
 });
 
-// GET /api/recent - Fetch last 10 entries from Supabase
+/**
+ * GET /api/recent - Get recent zodiac entries
+ */
 app.get('/api/recent', async (req, res) => {
   try {
-    const { data, error } = await supabase
-      .from('zodiac_entries')
-      .select('id, name, zodiac, dob')
-      .order('id', { ascending: false })
-      .limit(10);
-
-    if (error) {
-      console.error('Supabase fetch error:', error);
-      return res.status(500).json({ success: false, message: 'Database fetch error' });
-    }
-
-    res.json({ success: true, data });
+    const data = await readData();
+    // Return only the last 10 entries and exclude sensitive data if needed
+    const recentEntries = data.slice(0, 10).map(entry => ({
+      id: entry.id,
+      name: entry.name,
+      zodiacSign: entry.zodiacSign,
+      timestamp: entry.timestamp
+    }));
+    
+    res.json({
+      success: true,
+      data: recentEntries
+    });
+    
   } catch (error) {
     console.error('Error fetching recent entries:', error);
-    res.status(500).json({ success: false, message: 'Internal server error' });
+    res.status(500).json({ 
+      success: false, 
+      message: 'Internal server error' 
+    });
   }
 });
 
-// Serve React app if dist exists
+// Serve React app for all other routes (SPA) - only if dist exists
 app.get('*', async (req, res) => {
+  // Re-check if dist exists in case it was built after server started
   distExists = await checkDistExists();
+  
   if (distExists) {
     try {
       const indexPath = path.join(__dirname, 'dist', 'index.html');
+      // Check if the specific index.html file exists before trying to serve it
       await fs.access(indexPath);
       res.sendFile(indexPath);
     } catch (error) {
       console.error('Error serving index.html:', error);
-      res.status(404).json({ success: false, message: 'Frontend not built properly. Run "npm run build" first.' });
+      res.status(404).json({ 
+        success: false, 
+        message: 'Frontend not built properly. Run "npm run build" first.' 
+      });
     }
   } else {
-    res.status(404).json({ success: false, message: 'Frontend not built. Run "npm run build" first, or use "npm run dev".' });
+    res.status(404).json({ 
+      success: false, 
+      message: 'Frontend not built. Run "npm run build" first, or use "npm run dev" for development.' 
+    });
   }
 });
 
 // Error handling middleware
 app.use((error, req, res, next) => {
   console.error('Unhandled error:', error);
-  res.status(500).json({ success: false, message: 'Something went wrong!' });
+  res.status(500).json({ 
+    success: false, 
+    message: 'Something went wrong!' 
+  });
 });
 
-app.listen(PORT, () => {
-  console.log(`🚀 Server running on port ${PORT}`);
-});
+// Initialize data file and start server
+async function startServer() {
+  try {
+    await initializeDataFile();
+    app.listen(PORT, () => {
+      console.log(`🚀 Server running on port ${PORT}`);
+      console.log(`📊 Data will be stored in: ${DATA_FILE}`);
+      if (!distExists) {
+        console.log('⚠️  Frontend not built. Use "npm run dev" for development or "npm run build" for production.');
+      }
+    });
+  } catch (error) {
+    console.error('Failed to start server:', error);
+    process.exit(1);
+  }
+}
+
+startServer();
