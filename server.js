@@ -6,7 +6,8 @@ import { body, validationResult } from 'express-validator';
 import path from 'path';
 import { fileURLToPath } from 'url';
 import fs from 'fs/promises';
-import { supabase } from 'supabaseClient.js';
+import { supabase } from './supabaseClient.js';
+
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
