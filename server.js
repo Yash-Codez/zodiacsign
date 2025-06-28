@@ -5,8 +5,8 @@ import rateLimit from 'express-rate-limit';
 import { body, validationResult } from 'express-validator';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import pool from './db.js';
 import fs from 'fs/promises';
+import { supabase } from 'supabaseClient.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -111,7 +111,7 @@ function calculateZodiacSign(date) {
   return 'Unknown';
 }
 
-// POST /api/zodiac - Store in database
+// POST /api/zodiac - Store in Supabase
 app.post('/api/zodiac', zodiacValidation, async (req, res) => {
   try {
     const errors = validationResult(req);
@@ -123,10 +123,14 @@ app.post('/api/zodiac', zodiacValidation, async (req, res) => {
     const birthDate = new Date(dateOfBirth);
     const zodiacSign = calculateZodiacSign(birthDate);
 
-    const result = await pool.query(
-      'INSERT INTO zodiac_entries (name, dob, zodiac) VALUES ($1, $2, $3) RETURNING *',
-      [name.trim(), dateOfBirth, zodiacSign]
-    );
+    const { data, error } = await supabase
+      .from('zodiac_entries')
+      .insert([{ name: name.trim(), dob: dateOfBirth, zodiac: zodiacSign }]);
+
+    if (error) {
+      console.error('Supabase insert error:', error);
+      return res.status(500).json({ success: false, message: 'Database insert error' });
+    }
 
     res.json({
       success: true,
@@ -141,13 +145,21 @@ app.post('/api/zodiac', zodiacValidation, async (req, res) => {
   }
 });
 
-// GET /api/recent - Fetch last 10 entries from DB
+// GET /api/recent - Fetch last 10 entries from Supabase
 app.get('/api/recent', async (req, res) => {
   try {
-    const result = await pool.query(
-      'SELECT id, name, zodiac, dob AS timestamp FROM zodiac_entries ORDER BY id DESC LIMIT 10'
-    );
-    res.json({ success: true, data: result.rows });
+    const { data, error } = await supabase
+      .from('zodiac_entries')
+      .select('id, name, zodiac, dob')
+      .order('id', { ascending: false })
+      .limit(10);
+
+    if (error) {
+      console.error('Supabase fetch error:', error);
+      return res.status(500).json({ success: false, message: 'Database fetch error' });
+    }
+
+    res.json({ success: true, data });
   } catch (error) {
     console.error('Error fetching recent entries:', error);
     res.status(500).json({ success: false, message: 'Internal server error' });
@@ -177,7 +189,6 @@ app.use((error, req, res, next) => {
   res.status(500).json({ success: false, message: 'Something went wrong!' });
 });
 
-// Start server
 app.listen(PORT, () => {
   console.log(`🚀 Server running on port ${PORT}`);
 });
