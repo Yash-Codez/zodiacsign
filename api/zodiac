@@ -1,26 +1,33 @@
 import { supabase } from './supabaseClient.js';
 
-// inside app.post('/api/zodiac'...)
-const { name, dateOfBirth } = req.body;
-const birthDate = new Date(dateOfBirth);
-const zodiacSign = calculateZodiacSign(birthDate);
+app.post('/api/zodiac', async (req, res) => {
+  const { name, dateOfBirth } = req.body;
+  const birthDate = new Date(dateOfBirth);
+  const zodiacSign = calculateZodiacSign(birthDate);
 
-// Save to Supabase
-const { error } = await supabase.from('zodiac_entries').insert([{
-  name: name.trim(),
-  date_of_birth: dateOfBirth,
-  zodiac_sign: zodiacSign,
-}]);
+  // ✅ Log incoming data
+  console.log('🔹 Received POST data:', { name, dateOfBirth, zodiacSign });
 
-if (error) {
-  console.error('Supabase insert error:', error);
-  return res.status(500).json({ success: false, message: 'Failed to save data' });
-}
+  // Save to Supabase
+  const { error, data } = await supabase.from('zodiac_entries').insert([{
+    name: name.trim(),
+    date_of_birth: dateOfBirth,
+    zodiac_sign: zodiacSign,
+  }]);
 
-res.json({
-  success: true,
-  data: {
-    zodiacSign,
-    message: `Hello ${name}! Your zodiac sign is ${zodiacSign}.`
+  if (error) {
+    console.error('❌ Supabase insert error:', error);
+    return res.status(500).json({ success: false, message: 'Failed to save data' });
   }
+
+  // ✅ Log successful insertion
+  console.log('✅ Supabase insert success:', data);
+
+  res.json({
+    success: true,
+    data: {
+      zodiacSign,
+      message: `Hello ${name}! Your zodiac sign is ${zodiacSign}.`
+    }
+  });
 });
