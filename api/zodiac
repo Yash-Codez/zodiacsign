@@ -12,7 +12,7 @@ app.post('/api/zodiac', async (req, res) => {
   const { error, data } = await supabase.from('zodiac_entries').insert([{
     name: name.trim(),
     dateofbirth: dateOfBirth,
-    zodiac_sign: zodiacSign,
+    zodiac: zodiacSign,
   }]);
 
   if (error) {
